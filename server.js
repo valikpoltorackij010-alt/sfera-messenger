@@ -7,7 +7,12 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling']
+});
 const PORT = process.env.PORT || 3000;
 const DB_FILE = path.join(__dirname, 'sfera_data.json');
 
@@ -52,8 +57,13 @@ if (!db.users.find(u => u.login === 'system')) {
 }
 
 // ===== API =====
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 app.use(express.static(__dirname));
+
+// Healthcheck for Railway
+app.get('/health', (req, res) => res.json({ ok: true }));
+app.get('/', (req, res) => res.json({ status: 'Sfera is running' }));
 
 app.post('/api/register', (req, res) => {
   const { name, login, pass } = req.body;
@@ -117,13 +127,19 @@ app.post('/api/messages', (req, res) => {
 });
 
 app.post('/api/voice', (req, res) => {
-  const { chatId, userId, audio, duration } = req.body;
-  if (!audio) return res.status(400).json({ error: 'Нет аудио' });
-  const msg = { chatId, userId, text: '', audio, duration: duration || 0, type: 'voice', time: Date.now() };
-  db.messages.push(msg);
-  saveDB();
-  io.emit('message', msg);
-  res.json({ msg });
+  try {
+    const { chatId, userId, audio, duration } = req.body;
+    if (!audio) return res.status(400).json({ error: 'Нет аудио' });
+    if (!chatId || !userId) return res.status(400).json({ error: 'Не указан чат или пользователь' });
+    const msg = { chatId, userId, text: '', audio, duration: duration || 0, type: 'voice', time: Date.now() };
+    db.messages.push(msg);
+    saveDB();
+    io.emit('message', msg);
+    res.json({ msg });
+  } catch (e) {
+    console.error('Voice error:', e);
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
 });
 
 app.post('/api/profile', (req, res) => {
@@ -156,5 +172,15 @@ io.on('connection', (socket) => {
   });
 });
 
+// ===== AUTOSAVE =====
+setInterval(() => saveDB(), 30000);
+
+// ===== ERROR HANDLING =====
+process.on('uncaughtException', (e) => console.error('Uncaught:', e));
+process.on('unhandledRejection', (e) => console.error('Unhandled:', e));
+
 // ===== START =====
-server.listen(PORT, () => console.log(`Sfera server: http://localhost:${PORT}`));
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Sfera server: http://localhost:${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+});

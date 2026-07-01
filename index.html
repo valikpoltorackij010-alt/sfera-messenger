@@ -156,15 +156,20 @@ button{cursor:pointer}
 ::-webkit-scrollbar-thumb:hover{background:var(--tx4)}
 
 /* VOICE MESSAGE */
-.msg-voice{display:flex;align-items:center;gap:10px;min-width:200px}
-.msg-voice button{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.15);border:none;color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:var(--transition)}
-.msg-voice button:hover{background:rgba(255,255,255,0.25);transform:scale(1.1)}
-.msg.in .msg-voice button{background:var(--bg4)}
-.msg.in .msg-voice button:hover{background:var(--bg5)}
-.msg-voice audio{height:36px;flex:1;min-width:0;max-width:180px;border-radius:8px}
-.msg-voice audio::-webkit-media-controls-panel{background:transparent}
-.msg-voice-duration{font-size:11px;color:rgba(255,255,255,0.5);flex-shrink:0}
-.msg.in .msg-voice-duration{color:var(--tx3)}
+.msg-voice{display:flex;align-items:center;gap:10px;min-width:240px}
+.msg-voice-play{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.15);border:none;color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:var(--transition)}
+.msg-voice-play:hover{background:rgba(255,255,255,0.25);transform:scale(1.1)}
+.msg.in .msg-voice-play{background:var(--bg4)}
+.msg.in .msg-voice-play:hover{background:var(--bg5)}
+.msg-voice-wave{flex:1;display:flex;align-items:center;gap:2px;height:32px;min-width:0}
+.msg-voice-wave span{width:3px;border-radius:2px;transition:height 0.1s ease}
+.msg.out .msg-voice-wave span{background:rgba(255,255,255,0.4)}
+.msg.in .msg-voice-wave span{background:var(--tx4)}
+.msg-voice-wave span.active{background:rgba(255,255,255,0.9)}
+.msg.in .msg-voice-wave span.active{background:var(--a2)}
+.msg-voice-time{font-size:11px;color:rgba(255,255,255,0.5);flex-shrink:0;font-variant-numeric:tabular-nums}
+.msg.in .msg-voice-time{color:var(--tx3)}
+.msg-voice-progress{display:none}
 
 /* MIC BUTTON */
 .mic-btn{width:46px;height:46px;border-radius:var(--radius);background:linear-gradient(135deg,var(--gr),#0090FF);border:none;color:#fff;font-size:18px;flex-shrink:0;transition:var(--transition);display:flex;align-items:center;justify-content:center}
@@ -178,10 +183,12 @@ button{cursor:pointer}
 .recording-bar.active{display:flex}
 .rec-dot{width:10px;height:10px;border-radius:50%;background:var(--red);animation:recBlink 1s infinite}
 @keyframes recBlink{0%,100%{opacity:1}50%{opacity:0.3}}
-.rec-timer{font-size:14px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+.rec-timer{font-size:14px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums;min-width:40px}
 .rec-waveform{flex:1;display:flex;align-items:center;gap:2px;height:30px}
 .rec-waveform span{width:3px;background:var(--red);border-radius:2px;animation:waveAnim 0.6s ease-in-out infinite alternate}
 @keyframes waveAnim{from{height:4px}to{height:24px}}
+.rec-progress{position:absolute;bottom:0;left:0;right:0;height:3px;background:var(--bg4)}
+.rec-progress-bar{height:100%;background:linear-gradient(90deg,var(--a),var(--red));transition:width 0.3s linear;border-radius:2px}
 .rec-cancel{padding:8px 18px;background:transparent;border:1px solid rgba(255,107,107,0.3);border-radius:var(--radius-xs);color:var(--red);font-size:13px;font-weight:600;cursor:pointer;transition:var(--transition)}
 .rec-cancel:hover{background:var(--red2);border-color:var(--red)}
 .rec-send{padding:8px 18px;background:linear-gradient(135deg,var(--a),var(--a2));border:none;border-radius:var(--radius-xs);color:#fff;font-size:13px;font-weight:700;cursor:pointer;transition:var(--transition)}
@@ -275,6 +282,7 @@ button{cursor:pointer}
         <div class="rec-waveform" id="rec-waveform"></div>
         <button class="rec-cancel" onclick="cancelRecording()">Отмена</button>
         <button class="rec-send" onclick="sendVoice()">Отправить</button>
+        <div class="rec-progress"><div class="rec-progress-bar" id="rec-progress-bar"></div></div>
       </div>
     </div>
   </div>
@@ -641,6 +649,8 @@ async function toggleRecording(){
       var m = Math.floor(elapsed/60);
       var s = elapsed%60;
       document.getElementById('rec-timer').textContent = m+':'+(s<10?'0':'')+s;
+      var pct = Math.min((elapsed/60)*100, 100);
+      document.getElementById('rec-progress-bar').style.width = pct+'%';
     },200);
 
     setTimeout(function(){
@@ -661,6 +671,7 @@ function cancelRecording(){
   audioChunks = [];
   recordedBlob = null;
   document.getElementById('recording-bar').classList.remove('active');
+  document.getElementById('rec-progress-bar').style.width = '0%';
   clearInterval(recTimerInterval);
   var micBtn = document.getElementById('mic-btn');
   micBtn.classList.remove('recording');
@@ -669,6 +680,7 @@ function cancelRecording(){
 async function sendVoice(){
   if(!recordedBlob || !currentChat) return;
   document.getElementById('recording-bar').classList.remove('active');
+  document.getElementById('rec-progress-bar').style.width = '0%';
   clearInterval(recTimerInterval);
 
   var blob = recordedBlob;
@@ -703,10 +715,83 @@ function formatDuration(sec){
 
 function renderVoiceMsg(m){
   var dur = m.duration || 0;
-  return '<div class="msg-voice">' +
-    '<audio controls preload="none" src="'+esc(m.audio)+'"></audio>' +
-    '<span class="msg-voice-duration">'+formatDuration(dur)+'</span>' +
+  var msgId = 'voice_' + m.time + '_' + Math.random().toString(36).slice(2,6);
+  var waves = '';
+  for(var i=0;i<28;i++){
+    var h = 4 + Math.random()*20;
+    waves += '<span style="height:'+h+'px" data-idx="'+i+'"></span>';
+  }
+  return '<div class="msg-voice" data-msg-id="'+msgId+'">' +
+    '<button class="msg-voice-play" onclick="playVoice(this,\''+msgId+'\')" data-src="'+esc(m.audio)+'">▶</button>' +
+    '<div class="msg-voice-wave">'+waves+'</div>' +
+    '<span class="msg-voice-time">0:'+((dur<10?'0':'')+dur)+'</span>' +
+    '<audio class="msg-voice-audio" preload="none" src="'+esc(m.audio)+'"></audio>' +
     '</div>';
+}
+
+var activeVoiceMsg = null;
+
+function playVoice(btn, msgId){
+  var container = document.querySelector('[data-msg-id="'+msgId+'"]');
+  if(!container) return;
+  var audio = container.querySelector('.msg-voice-audio');
+  var timeEl = container.querySelector('.msg-voice-time');
+  var waves = container.querySelectorAll('.msg-voice-wave span');
+
+  if(activeVoiceMsg && activeVoiceMsg.msgId !== msgId){
+    activeVoiceMsg.audio.pause();
+    activeVoiceMsg.audio.currentTime = 0;
+    var oldBtn = activeVoiceMsg.container.querySelector('.msg-voice-play');
+    if(oldBtn) oldBtn.textContent = '▶';
+    activeVoiceMsg = null;
+  }
+
+  if(!audio.paused){
+    audio.pause();
+    btn.textContent = '▶';
+    activeVoiceMsg = null;
+    return;
+  }
+
+  btn.textContent = '⏸';
+  activeVoiceMsg = { audio: audio, container: container, msgId: msgId };
+
+  audio.ontimeupdate = function(){
+    var dur = audio.duration || 1;
+    var cur = audio.currentTime;
+    var pct = cur / dur;
+    var totalWaves = waves.length;
+    var activeCount = Math.floor(pct * totalWaves);
+    for(var i=0;i<totalWaves;i++){
+      if(i <= activeCount){
+        waves[i].classList.add('active');
+        var variation = Math.sin(Date.now()/200 + i*0.5) * 8 + 12;
+        waves[i].style.height = variation + 'px';
+      } else {
+        waves[i].classList.remove('active');
+        var h = 4 + Math.random()*20;
+        waves[i].style.height = h + 'px';
+      }
+    }
+    var remaining = Math.ceil(audio.duration - cur);
+    var m = Math.floor(remaining/60);
+    var s = remaining%60;
+    timeEl.textContent = m+':'+(s<10?'0':'')+s;
+  };
+
+  audio.onended = function(){
+    btn.textContent = '▶';
+    activeVoiceMsg = null;
+    for(var i=0;i<waves.length;i++){
+      waves[i].classList.remove('active');
+      var h = 4 + Math.random()*20;
+      waves[i].style.height = h + 'px';
+    }
+    var dur = audio.duration || 0;
+    timeEl.textContent = formatDuration(Math.ceil(dur));
+  };
+
+  audio.play();
 }
 
 // ===== AUTO-LOGIN =====
