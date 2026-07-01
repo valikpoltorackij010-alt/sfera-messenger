@@ -155,6 +155,38 @@ button{cursor:pointer}
 ::-webkit-scrollbar-thumb{background:var(--bg5);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--tx4)}
 
+/* VOICE MESSAGE */
+.msg-voice{display:flex;align-items:center;gap:10px;min-width:200px}
+.msg-voice button{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.15);border:none;color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:var(--transition)}
+.msg-voice button:hover{background:rgba(255,255,255,0.25);transform:scale(1.1)}
+.msg.in .msg-voice button{background:var(--bg4)}
+.msg.in .msg-voice button:hover{background:var(--bg5)}
+.msg-voice audio{height:36px;flex:1;min-width:0;max-width:180px;border-radius:8px}
+.msg-voice audio::-webkit-media-controls-panel{background:transparent}
+.msg-voice-duration{font-size:11px;color:rgba(255,255,255,0.5);flex-shrink:0}
+.msg.in .msg-voice-duration{color:var(--tx3)}
+
+/* MIC BUTTON */
+.mic-btn{width:46px;height:46px;border-radius:var(--radius);background:linear-gradient(135deg,var(--gr),#0090FF);border:none;color:#fff;font-size:18px;flex-shrink:0;transition:var(--transition);display:flex;align-items:center;justify-content:center}
+.mic-btn:hover{transform:scale(1.08);box-shadow:0 6px 20px rgba(0,210,211,0.4)}
+.mic-btn:active{transform:scale(0.95)}
+.mic-btn.recording{background:linear-gradient(135deg,var(--red),#ff4757);animation:micPulse 1s infinite}
+@keyframes micPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,107,107,0.4)}50%{box-shadow:0 0 0 10px rgba(255,107,107,0)}}
+
+/* RECORDING BAR */
+.recording-bar{display:none;padding:12px 24px;border-top:1px solid var(--bd);background:rgba(14,14,26,0.8);backdrop-filter:blur(12px);align-items:center;gap:14px;position:relative;z-index:1}
+.recording-bar.active{display:flex}
+.rec-dot{width:10px;height:10px;border-radius:50%;background:var(--red);animation:recBlink 1s infinite}
+@keyframes recBlink{0%,100%{opacity:1}50%{opacity:0.3}}
+.rec-timer{font-size:14px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+.rec-waveform{flex:1;display:flex;align-items:center;gap:2px;height:30px}
+.rec-waveform span{width:3px;background:var(--red);border-radius:2px;animation:waveAnim 0.6s ease-in-out infinite alternate}
+@keyframes waveAnim{from{height:4px}to{height:24px}}
+.rec-cancel{padding:8px 18px;background:transparent;border:1px solid rgba(255,107,107,0.3);border-radius:var(--radius-xs);color:var(--red);font-size:13px;font-weight:600;cursor:pointer;transition:var(--transition)}
+.rec-cancel:hover{background:var(--red2);border-color:var(--red)}
+.rec-send{padding:8px 18px;background:linear-gradient(135deg,var(--a),var(--a2));border:none;border-radius:var(--radius-xs);color:#fff;font-size:13px;font-weight:700;cursor:pointer;transition:var(--transition)}
+.rec-send:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(108,92,231,0.4)}
+
 /* ANIMATIONS */
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
 .typing{animation:pulse 1.5s infinite}
@@ -234,7 +266,15 @@ button{cursor:pointer}
       <div class="chat-messages" id="chat-messages"></div>
       <div class="chat-input">
         <textarea id="msg-input" rows="1" placeholder="Напиши сообщение..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}"></textarea>
+        <button class="mic-btn" id="mic-btn" onclick="toggleRecording()" title="Голосовое сообщение">🎤</button>
         <button onclick="sendMsg()">➤</button>
+      </div>
+      <div class="recording-bar" id="recording-bar">
+        <div class="rec-dot"></div>
+        <div class="rec-timer" id="rec-timer">0:00</div>
+        <div class="rec-waveform" id="rec-waveform"></div>
+        <button class="rec-cancel" onclick="cancelRecording()">Отмена</button>
+        <button class="rec-send" onclick="sendVoice()">Отправить</button>
       </div>
     </div>
   </div>
@@ -384,7 +424,7 @@ function renderList(){
     });
     chats.forEach(function(c){
       var last = c.messages.length ? c.messages[c.messages.length-1] : null;
-      var lastText = last ? (last.userId===currentUser.id?'Ты: ':'') + last.text : 'Нет сообщений';
+      var lastText = last ? (last.userId===currentUser.id?'Ты: ':'') + (last.type==='voice'?'🎤 Голосовое':last.text) : 'Нет сообщений';
       var lastTime = last ? timeShort(last.time) : '';
       var isActive = currentChat && currentChat.id===c.id;
       if(c.type==='group'){
@@ -491,7 +531,11 @@ function renderMessages(){
     var clr = sender ? sender.color : '#555';
     html += '<div class="msg '+(isOut?'out':'in')+'">';
     if(!isOut && currentChat.type==='group') html+='<div class="msg-sender" style="color:'+clr+'">'+esc(name)+'</div>';
-    html += esc(m.text);
+    if(m.type==='voice' && m.audio){
+      html += renderVoiceMsg(m);
+    } else {
+      html += esc(m.text);
+    }
     html += '<div class="msg-time">'+timeMsg(m.time)+'</div></div>';
   });
   box.innerHTML = html;
@@ -537,6 +581,132 @@ function timeAgo(t){
   if(s<3600) return Math.floor(s/60)+' мин назад';
   if(s<86400) return Math.floor(s/3600)+' ч назад';
   return Math.floor(s/86400)+' дн назад';
+}
+
+// ===== VOICE RECORDING =====
+var mediaRecorder = null;
+var audioChunks = [];
+var recordingStartTime = 0;
+var recTimerInterval = null;
+var recordedBlob = null;
+
+function initWaveform(){
+  var wf = document.getElementById('recording-bar');
+  var wave = document.getElementById('rec-waveform');
+  wave.innerHTML = '';
+  for(var i=0;i<20;i++){
+    var s = document.createElement('span');
+    s.style.animationDelay = (Math.random()*0.5)+'s';
+    s.style.animationDuration = (0.3+Math.random()*0.5)+'s';
+    wave.appendChild(s);
+  }
+}
+
+async function toggleRecording(){
+  var micBtn = document.getElementById('mic-btn');
+  var recBar = document.getElementById('recording-bar');
+
+  if(mediaRecorder && mediaRecorder.state === 'recording'){
+    mediaRecorder.stop();
+    micBtn.classList.remove('recording');
+    return;
+  }
+
+  try{
+    var stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    audioChunks = [];
+    recordedBlob = null;
+    mediaRecorder = new MediaRecorder(stream);
+
+    mediaRecorder.ondataavailable = function(e){
+      if(e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = function(){
+      stream.getTracks().forEach(function(t){t.stop();});
+      if(audioChunks.length > 0 && !recordedBlob){
+        recordedBlob = new Blob(audioChunks, {type:'audio/webm'});
+      }
+    };
+
+    mediaRecorder.start();
+    micBtn.classList.add('recording');
+    recordingStartTime = Date.now();
+
+    recBar.classList.add('active');
+    initWaveform();
+
+    recTimerInterval = setInterval(function(){
+      var elapsed = Math.floor((Date.now()-recordingStartTime)/1000);
+      var m = Math.floor(elapsed/60);
+      var s = elapsed%60;
+      document.getElementById('rec-timer').textContent = m+':'+(s<10?'0':'')+s;
+    },200);
+
+    setTimeout(function(){
+      if(mediaRecorder && mediaRecorder.state==='recording'){
+        mediaRecorder.stop();
+        micBtn.classList.remove('recording');
+      }
+    },60000);
+  }catch(e){
+    alert('Не удалось получить доступ к микрофону');
+  }
+}
+
+function cancelRecording(){
+  if(mediaRecorder && mediaRecorder.state==='recording'){
+    mediaRecorder.stop();
+  }
+  audioChunks = [];
+  recordedBlob = null;
+  document.getElementById('recording-bar').classList.remove('active');
+  clearInterval(recTimerInterval);
+  var micBtn = document.getElementById('mic-btn');
+  micBtn.classList.remove('recording');
+}
+
+async function sendVoice(){
+  if(!recordedBlob || !currentChat) return;
+  document.getElementById('recording-bar').classList.remove('active');
+  clearInterval(recTimerInterval);
+
+  var blob = recordedBlob;
+  recordedBlob = null;
+
+  var duration = Math.floor((Date.now()-recordingStartTime)/1000);
+  var reader = new FileReader();
+  reader.onload = async function(){
+    var base64 = reader.result;
+    await fetch('/api/voice', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        chatId:currentChat.id,
+        userId:currentUser.id,
+        audio:base64,
+        duration:duration
+      })
+    });
+  };
+  reader.readAsDataURL(blob);
+
+  var micBtn = document.getElementById('mic-btn');
+  micBtn.classList.remove('recording');
+}
+
+function formatDuration(sec){
+  var m = Math.floor(sec/60);
+  var s = sec%60;
+  return m+':'+(s<10?'0':'')+s;
+}
+
+function renderVoiceMsg(m){
+  var dur = m.duration || 0;
+  return '<div class="msg-voice">' +
+    '<audio controls preload="none" src="'+esc(m.audio)+'"></audio>' +
+    '<span class="msg-voice-duration">'+formatDuration(dur)+'</span>' +
+    '</div>';
 }
 
 // ===== AUTO-LOGIN =====

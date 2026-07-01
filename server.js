@@ -41,7 +41,7 @@ if (!db.users.find(u => u.login === 'system')) {
     { id: 'demo2', name: 'Мария', login: 'masha', pass: hash('1234'), color: '#ff9ff3', online: false, lastSeen: now },
     { id: 'demo3', name: 'Дмитрий', login: 'dima', pass: hash('1234'), color: '#feca57', online: false, lastSeen: now }
   );
-  db.chats.push({ id: 'group', type: 'group', name: 'Общий чат', members: ['system','admin','demo1','demo2','demo3'] });
+  db.chats.push({ id: 'group', type: 'group', name: 'Общий чат', members: JSON.stringify(['system','admin','demo1','demo2','demo3']) });
   db.messages.push(
     { chatId: 'group', userId: 'system', text: 'Добро пожаловать в общий чат Sfera!', time: now - 100000 },
     { chatId: 'group', userId: 'demo1', text: 'Привет всем! Как дела?', time: now - 80000 },
@@ -52,7 +52,7 @@ if (!db.users.find(u => u.login === 'system')) {
 }
 
 // ===== API =====
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static(__dirname));
 
 app.post('/api/register', (req, res) => {
@@ -99,7 +99,7 @@ app.get('/api/chats/:userId', (req, res) => {
 app.post('/api/chats', (req, res) => {
   const { type, name, members } = req.body;
   const id = cid();
-  db.chats.push({ id, type, name: name || null, members });
+  db.chats.push({ id, type, name: name || null, members: JSON.stringify(members) });
   if (type === 'group') db.messages.push({ chatId: id, userId: 'system', text: 'Чат создан!', time: Date.now() });
   saveDB();
   const chat = db.chats.find(c => c.id === id);
@@ -110,6 +110,16 @@ app.post('/api/messages', (req, res) => {
   const { chatId, userId, text } = req.body;
   if (!text) return res.status(400).json({ error: 'Пустое сообщение' });
   const msg = { chatId, userId, text, time: Date.now() };
+  db.messages.push(msg);
+  saveDB();
+  io.emit('message', msg);
+  res.json({ msg });
+});
+
+app.post('/api/voice', (req, res) => {
+  const { chatId, userId, audio, duration } = req.body;
+  if (!audio) return res.status(400).json({ error: 'Нет аудио' });
+  const msg = { chatId, userId, text: '', audio, duration: duration || 0, type: 'voice', time: Date.now() };
   db.messages.push(msg);
   saveDB();
   io.emit('message', msg);
