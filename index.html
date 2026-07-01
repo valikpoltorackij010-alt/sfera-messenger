@@ -253,28 +253,23 @@ button{cursor:pointer}
   </div>
 </div>
 
+<script src="/socket.io/socket.io.js"></script>
 <script>
-// ===== DATA =====
-var DB_KEY = 'sfera_db';
 var SESSION_KEY = 'sfera_session';
-var db = JSON.parse(localStorage.getItem(DB_KEY) || 'null') || { users: [], chats: [], nextChatId: 1 };
-function saveDB(){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
-
-// Pre-create system accounts
-if(!db.users.find(function(u){return u.login==='system'})){
-  db.users.push({id:'system',name:'Sfera Bot',login:'system',pass:'',color:'#6C5CE7',online:false,lastSeen:Date.now()});
-  db.users.push({id:'admin',name:'Админ',login:'admin',pass:'admin',color:'#ff6b6b',online:false,lastSeen:Date.now()});
-  db.users.push({id:'demo1',name:'Алексей',login:'alex',pass:'1234',color:'#00d2d3',online:false,lastSeen:Date.now()});
-  db.users.push({id:'demo2',name:'Мария',login:'masha',pass:'1234',color:'#ff9ff3',online:false,lastSeen:Date.now()});
-  db.users.push({id:'demo3',name:'Дмитрий',login:'dima',pass:'1234',color:'#feca57',online:false,lastSeen:Date.now()});
-  saveDB();
-}
-
 var currentUser = null;
 var currentChat = null;
 var currentTab = 'chats';
-var bc = null;
-try { bc = new BroadcastChannel('sfera_channel'); } catch(e){}
+var allUsers = [];
+var allChats = [];
+var socket = io();
+
+// ===== API =====
+async function api(url, body) {
+  var res = await fetch(url, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  var data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Ошибка');
+  return data;
+}
 
 // ===== AUTH =====
 function showAuth(view){
@@ -284,73 +279,59 @@ function showAuth(view){
 function showErr(id,msg){ var el=document.getElementById(id); el.textContent=msg; el.style.display='block'; }
 function hideErr(id){ document.getElementById(id).style.display='none'; }
 
-function doLogin(){
+async function doLogin(){
   hideErr('login-err');
   var login = document.getElementById('login-login').value.trim().toLowerCase();
   var pass = document.getElementById('login-pass').value;
   if(!login||!pass){ showErr('login-err','Заполни все поля'); return; }
-  var user = db.users.find(function(u){return u.login===login && u.pass===pass;});
-  if(!user){ showErr('login-err','Неверный логин или пароль'); return; }
-  startApp(user);
+  try {
+    var data = await api('/api/login', { login, pass });
+    startApp(data.user);
+  } catch(e) {
+    showErr('login-err', e.message);
+  }
 }
 
-function doRegister(){
+async function doRegister(){
   hideErr('reg-err');
   var name = document.getElementById('reg-name').value.trim();
   var login = document.getElementById('reg-login').value.trim().toLowerCase();
   var pass = document.getElementById('reg-pass').value;
   if(!name||!login||!pass){ showErr('reg-err','Заполни все поля'); return; }
-  if(login.length<3){ showErr('reg-err','Логин минимум 3 символа'); return; }
-  if(pass.length<4){ showErr('reg-err','Пароль минимум 4 символа'); return; }
-  if(db.users.find(function(u){return u.login===login;})){ showErr('reg-err','Логин уже занят'); return; }
-  var colors = ['#6C5CE7','#00d2d3','#ff6b6b','#ff9ff3','#feca57','#51cf66','#ffa502','#70a1ff'];
-  var newUser = {
-    id: 'u_' + Date.now(),
-    name: name,
-    login: login,
-    pass: pass,
-    color: colors[Math.floor(Math.random()*colors.length)],
-    online: true,
-    lastSeen: Date.now()
-  };
-  db.users.push(newUser);
-  saveDB();
-  startApp(newUser);
-}
-
-// ===== APP =====
-function startApp(user){
-  currentUser = user;
-  currentUser.online = true;
-  currentUser.lastSeen = Date.now();
-  saveDB();
-  // Save session
-  localStorage.setItem(SESSION_KEY, user.id);
-  document.querySelector('.auth').style.display = 'none';
-  document.getElementById('app').classList.add('active');
-  broadcastPresence();
-  renderList();
-  startHeartbeat();
-  // Create default group chat
-  if(!db.chats.find(function(c){return c.type==='group';})){
-    db.chats.push({id:'group',type:'group',name:'Общий чат',members:['system','admin','demo1','demo2','demo3'],messages:[
-      {from:'system',text:'Добро пожаловать в общий чат Sfera! 🎉',time:Date.now()-100000},
-      {from:'demo1',text:'Привет всем! Как дела?',time:Date.now()-80000},
-      {from:'demo2',text:'Привет! Всё отлично 😊',time:Date.now()-60000},
-      {from:'demo3',text:'Добро пожаловать новичкам!',time:Date.now()-40000}
-    ]});
-    saveDB();
+  try {
+    var data = await api('/api/register', { name, login, pass });
+    startApp(data.user);
+  } catch(e) {
+    showErr('reg-err', e.message);
   }
 }
 
-function logout(){
-  currentUser.online = false;
-  currentUser.lastSeen = Date.now();
-  saveDB();
-  broadcastPresence();
+// ===== APP =====
+async function startApp(user){
+  currentUser = user;
+  localStorage.setItem(SESSION_KEY, user.id);
+  document.querySelector('.auth').style.display = 'none';
+  document.getElementById('app').classList.add('active');
+  socket.emit('join', currentUser.id);
+  await loadData();
+  renderList();
+}
+
+async function loadData(){
+  var uRes = await fetch('/api/users');
+  var uData = await uRes.json();
+  allUsers = uData.users;
+  var cRes = await fetch('/api/chats/' + currentUser.id);
+  var cData = await cRes.json();
+  allChats = cData.chats;
+}
+
+async function logout(){
+  await api('/api/logout', { userId: currentUser.id });
   currentUser = null;
   currentChat = null;
-  // Clear session
+  allUsers = [];
+  allChats = [];
   localStorage.removeItem(SESSION_KEY);
   document.getElementById('app').classList.remove('active');
   document.getElementById('auth-login').style.display = 'flex';
@@ -360,60 +341,41 @@ function logout(){
   closeProf();
 }
 
-// ===== BROADCAST =====
-function broadcastPresence(){
-  if(!bc) return;
-  bc.postMessage({type:'presence',userId:currentUser.id,online:currentUser.online,name:currentUser.name});
-}
-function broadcastMsg(chatId,msg){
-  if(!bc) return;
-  bc.postMessage({type:'message',chatId:chatId,msg:msg});
-}
-if(bc){
-  bc.onmessage = function(e){
-    var d = e.data;
-    if(d.type==='presence'){
-      var u = db.users.find(function(x){return x.id===d.userId;});
-      if(u){ u.online = d.online; u.lastSeen = Date.now(); saveDB(); renderList(); updateChatHeader(); }
+// ===== SOCKET.IO =====
+socket.on('message', async function(msg){
+  if (!currentUser) return;
+  var chat = allChats.find(function(c){ return c.id === msg.chatId; });
+  if (chat) {
+    if (!chat.messages.find(function(m){ return m.time === msg.time && m.userId === msg.userId; })) {
+      chat.messages.push(msg);
     }
-    if(d.type==='message' && d.chatId && currentChat && currentChat.id===d.chatId){
-      var chat = db.chats.find(function(c){return c.id===d.chatId;});
-      if(chat && !chat.messages.find(function(m){return m.time===d.msg.time && m.from===d.msg.from;})){
-        chat.messages.push(d.msg);
-        saveDB();
-        renderMessages();
-      }
-    }
-  };
-}
+    if (currentChat && currentChat.id === msg.chatId) renderMessages();
+    renderList();
+  } else {
+    await loadData();
+    renderList();
+  }
+});
 
-// ===== HEARTBEAT =====
-function startHeartbeat(){
-  setInterval(function(){
-    if(!currentUser) return;
-    currentUser.lastSeen = Date.now();
-    currentUser.online = true;
-    saveDB();
-    broadcastPresence();
+socket.on('presence', function(data){
+  var u = allUsers.find(function(x){ return x.id === data.userId; });
+  if (u) {
+    u.online = data.online;
+    u.lastSeen = Date.now();
     renderList();
-  }, 15000);
-  setInterval(function(){
-    db.users.forEach(function(u){
-      if(u.id!==currentUser.id && Date.now()-u.lastSeen>30000) u.online=false;
-    });
-    saveDB();
-    renderList();
-  }, 20000);
-}
+    if (currentChat) updateChatHeader();
+  }
+});
 
 // ===== RENDER LIST =====
 function renderList(){
   var list = document.getElementById('users-list');
   var html = '';
   if(currentTab==='chats'){
-    var chats = db.chats.filter(function(c){
+    var chats = allChats.filter(function(c){
       if(c.type==='group') return true;
-      return c.members.indexOf(currentUser.id)>=0;
+      var members = JSON.parse(c.members);
+      return members.indexOf(currentUser.id)>=0;
     });
     chats.sort(function(a,b){
       var aL = a.messages.length ? a.messages[a.messages.length-1].time : 0;
@@ -422,17 +384,18 @@ function renderList(){
     });
     chats.forEach(function(c){
       var last = c.messages.length ? c.messages[c.messages.length-1] : null;
-      var lastText = last ? (last.from===currentUser.id?'Ты: ':'') + last.text : 'Нет сообщений';
+      var lastText = last ? (last.userId===currentUser.id?'Ты: ':'') + last.text : 'Нет сообщений';
       var lastTime = last ? timeShort(last.time) : '';
       var isActive = currentChat && currentChat.id===c.id;
       if(c.type==='group'){
         html += '<div class="user-item'+(isActive?' active':'')+'" onclick="openChat(\''+c.id+'\')">';
         html += '<div class="user-av group-av">📢</div>';
-        html += '<div class="user-info"><div class="user-name">'+c.name+'</div><div class="user-last">'+esc(lastText)+'</div></div>';
+        html += '<div class="user-info"><div class="user-name">'+esc(c.name)+'</div><div class="user-last">'+esc(lastText)+'</div></div>';
         html += '<div class="user-time">'+lastTime+'</div></div>';
       } else {
-        var otherId = c.members[0]===currentUser.id ? c.members[1] : c.members[0];
-        var other = db.users.find(function(u){return u.id===otherId;});
+        var members = JSON.parse(c.members);
+        var otherId = members[0]===currentUser.id ? members[1] : members[0];
+        var other = allUsers.find(function(u){return u.id===otherId;});
         if(!other) return;
         html += '<div class="user-item'+(isActive?' active':'')+'" onclick="openChat(\''+c.id+'\')">';
         html += '<div class="user-av" style="background:'+other.color+'">'+initials(other.name)+'<div class="user-status '+(other.online?'online':'offline')+'"></div></div>';
@@ -442,7 +405,7 @@ function renderList(){
     });
     if(!chats.length) html='<div style="text-align:center;padding:40px 20px;color:var(--tx3)"><div style="font-size:36px;margin-bottom:10px">📭</div>Пока нет чатов</div>';
   } else {
-    var users = db.users.filter(function(u){return u.id!==currentUser.id;});
+    var users = allUsers.filter(function(u){return u.id!==currentUser.id;});
     users.sort(function(a,b){return (b.online?1:0)-(a.online?1:0);});
     users.forEach(function(u){
       var lastSeenText = u.online ? 'В сети' : 'Был(а) '+timeAgo(u.lastSeen);
@@ -470,7 +433,7 @@ function switchTab(tab,el){
 
 // ===== CHAT =====
 function openChat(chatId){
-  var chat = db.chats.find(function(c){return c.id===chatId;});
+  var chat = allChats.find(function(c){return c.id===chatId;});
   if(!chat) return;
   currentChat = chat;
   document.getElementById('empty-chat').style.display = 'none';
@@ -478,45 +441,37 @@ function openChat(chatId){
   updateChatHeader();
   renderMessages();
   renderList();
-  // Auto-reply from bots
-  if(chat.type==='group' && chat.messages.length>0){
-    var last = chat.messages[chat.messages.length-1];
-    if(last.from!==currentUser.id && last.from!=='system'){
-      setTimeout(function(){ autoReply(chat); },2000+Math.random()*3000);
-    }
-  }
 }
 
-function openDM(userId){
+async function openDM(userId){
   var chatId = [currentUser.id, userId].sort().join('_');
-  var chat = db.chats.find(function(c){return c.id===chatId;});
+  var chat = allChats.find(function(c){return c.id===chatId;});
   if(!chat){
-    chat = {id:chatId,type:'dm',members:[currentUser.id,userId],messages:[]};
-    db.chats.push(chat);
-    saveDB();
+    var data = await api('/api/chats', { type: 'dm', members: [currentUser.id, userId] });
+    allChats.push(data.chat);
+    chat = data.chat;
   }
   openChat(chatId);
 }
 
-function createGroup(){
+async function createGroup(){
   var name = prompt('Название нового чата:');
   if(!name) return;
-  var chatId = 'group_'+Date.now();
-  db.chats.push({id:chatId,type:'group',name:name,members:[currentUser.id],messages:[
-    {from:'system',text:'Чат создан!',time:Date.now()}
-  ]});
-  saveDB();
-  openChat(chatId);
+  var data = await api('/api/chats', { type: 'group', name: name, members: [currentUser.id] });
+  allChats.push(data.chat);
+  openChat(data.chat.id);
 }
 
 function updateChatHeader(){
   var h = document.getElementById('chat-header');
   if(!currentChat) return;
   if(currentChat.type==='group'){
-    h.innerHTML = '<div class="chat-header-av group-av">📢</div><div class="chat-header-info"><div class="chat-header-name">'+esc(currentChat.name)+'</div><div class="chat-header-status">'+currentChat.members.length+' участников</div></div>';
+    var members = JSON.parse(currentChat.members);
+    h.innerHTML = '<div class="chat-header-av group-av">📢</div><div class="chat-header-info"><div class="chat-header-name">'+esc(currentChat.name)+'</div><div class="chat-header-status">'+members.length+' участников</div></div>';
   } else {
-    var otherId = currentChat.members[0]===currentUser.id ? currentChat.members[1] : currentChat[0];
-    var other = db.users.find(function(u){return u.id===otherId;});
+    var members = JSON.parse(currentChat.members);
+    var otherId = members[0]===currentUser.id ? members[1] : members[0];
+    var other = allUsers.find(function(u){return u.id===otherId;});
     if(!other) return;
     h.innerHTML = '<div class="chat-header-av" style="background:'+other.color+'">'+initials(other.name)+'</div><div class="chat-header-info"><div class="chat-header-name">'+esc(other.name)+'</div><div class="chat-header-status'+(other.online?'':' off')+'">'+(other.online?'В сети':'Не в сети')+'</div></div>';
   }
@@ -530,8 +485,8 @@ function renderMessages(){
   currentChat.messages.forEach(function(m){
     var d = new Date(m.time).toLocaleDateString('ru-RU');
     if(d!==lastDate){ html+='<div class="msg-date"><span>'+d+'</span></div>'; lastDate=d; }
-    var isOut = m.from===currentUser.id;
-    var sender = db.users.find(function(u){return u.id===m.from;});
+    var isOut = m.userId===currentUser.id;
+    var sender = allUsers.find(function(u){return u.id===m.userId;});
     var name = sender ? sender.name : 'Неизвестный';
     var clr = sender ? sender.color : '#555';
     html += '<div class="msg '+(isOut?'out':'in')+'">';
@@ -543,42 +498,12 @@ function renderMessages(){
   box.scrollTop = box.scrollHeight;
 }
 
-function sendMsg(){
+async function sendMsg(){
   var inp = document.getElementById('msg-input');
   var text = inp.value.trim();
   if(!text || !currentChat) return;
-  var msg = {from:currentUser.id, text:text, time:Date.now()};
-  currentChat.messages.push(msg);
-  saveDB();
   inp.value = '';
-  renderMessages();
-  renderList();
-  broadcastMsg(currentChat.id, msg);
-  // Auto-reply
-  if(currentChat.type==='group'){
-    setTimeout(function(){ autoReply(currentChat); },1500+Math.random()*3000);
-  }
-}
-
-function autoReply(chat){
-  if(!chat || !chat.messages.length) return;
-  var botIds = chat.members.filter(function(id){return id!==currentUser.id && id!=='system';});
-  if(!botIds.length) return;
-  var botId = botIds[Math.floor(Math.random()*botIds.length)];
-  var bot = db.users.find(function(u){return u.id===botId;});
-  if(!bot || !bot.online) return;
-  var replies = [
-    'Согласен! 👍','Интересно, расскажи больше!','Хаха, точно 😄',
-    'Круто!','Не знал об этом','А что думаешь о сервере?',
-    'Кто хочет поиграть?','Привет всем! 😊','Отличная новость!',
-    'Я тоже так думаю','Надо попробовать!','Кто-нибудь в игре?',
-    'Спасибо за инфо!','Класс!','Ого, серьёзно?'
-  ];
-  var msg = {from:botId, text:replies[Math.floor(Math.random()*replies.length)], time:Date.now()};
-  chat.messages.push(msg);
-  saveDB();
-  if(currentChat && currentChat.id===chat.id) renderMessages();
-  renderList();
+  await api('/api/messages', { chatId: currentChat.id, userId: currentUser.id, text: text });
 }
 
 // ===== PROFILE =====
@@ -591,11 +516,11 @@ function openProf(){
   document.getElementById('prof-name-edit').value = currentUser.name;
 }
 function closeProf(){ document.getElementById('profile-modal').classList.remove('show'); }
-function saveProf(){
+async function saveProf(){
   var n = document.getElementById('prof-name-edit').value.trim();
   if(!n) return;
+  await api('/api/profile', { userId: currentUser.id, name: n });
   currentUser.name = n;
-  saveDB();
   renderList();
   updateChatHeader();
   closeProf();
@@ -618,10 +543,10 @@ function timeAgo(t){
 (function(){
   var savedId = localStorage.getItem(SESSION_KEY);
   if(savedId){
-    var user = db.users.find(function(u){return u.id===savedId;});
-    if(user){
-      startApp(user);
-    }
+    fetch('/api/users').then(function(r){return r.json();}).then(function(data){
+      var user = data.users.find(function(u){return u.id===savedId;});
+      if(user) startApp(user);
+    });
   }
 })();
 </script>
